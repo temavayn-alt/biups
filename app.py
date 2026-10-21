@@ -712,9 +712,9 @@ TR = {
     "##### 📌 Код закладки:": ("##### 📌 Код закладки:", "##### 📌 Bookmark code:"),
     "##### 📋 Список назв:": ("##### 📋 Список названий:", "##### 📋 Title list:"),
     "Назви ігор:": ("Названия игр:", "Game titles:"),
-    "Для Данії та ПАР ціни округлюються вниз до кратних 0.25 — так вимагає eShop, а знижка не стає меншою за задану.": (
-        "Для Дании и ЮАР цены округляются вниз до кратных 0.25 — так требует eShop, а скидка не становится меньше заданной.",
-        "For Denmark and South Africa prices are rounded down to multiples of 0.25 — as eShop requires — so the discount never drops below the target."),
+    "Букмарклет враховує правила eShop: для Данії та ПАР ціни кратні 0.25, ціни в песо Чилі й Колумбії — цілі числа, а в країнах Америки ціна не опускається нижче мінімуму Nintendo (тоді знижка буде меншою за задану).": (
+        "Букмарклет учитывает правила eShop: для Дании и ЮАР цены кратны 0.25, цены в песо Чили и Колумбии — целые числа, а в странах Америки цена не опускается ниже минимума Nintendo (тогда скидка будет меньше заданной).",
+        "The bookmarklet follows eShop rules: prices in Denmark and South Africa are multiples of 0.25, Chilean and Colombian peso prices are whole numbers, and in the Americas the price never goes below Nintendo's minimum (the discount is then smaller than the target)."),
     "🟢 Подача на розпродажі Xbox": ("🟢 Подача на распродажи Xbox", "🟢 Xbox sale submission"),
     "— дедлайн": ("— дедлайн", "— deadline"),
     "🎯 Розпродаж": ("🎯 Распродажа", "🎯 Sale"),
@@ -3213,17 +3213,56 @@ def sales_timeline(schedule, color_key=None, color_map=None, height=240):
 # (код валюти або назва країни). Ціна округлюється ВНИЗ, щоб знижка не стала меншою за задану.
 QUARTER_PRICE_RE = r"\b(DKK|ZAR)\b|Denmark|Danmark|Dänemark|South Africa|Südafrika|Sydafrika"
 
-BOOKMARKLET_TEMPLATE = """javascript:(function(){{
-const discounts = {json_str};
-const quarterRe = new RegExp({quarter_re}, "i");
-function parsePrice(text){{let s=text.trim().replace(/[^0-9.,]/g,'');if(!s)return null;if(s.includes('.')&&s.includes(',')){{if(s.indexOf('.')<s.indexOf(',')){{s=s.replace(/\\./g,'').replace(',','.')}}else{{s=s.replace(/,/g,'')}}}}else if(s.includes(',')){{s=s.replace(',','.')}}return parseFloat(s);}}
-function getGameTitle(el){{let current=el;while(current&&current!==document.body){{let prev=current.previousElementSibling;while(prev){{let text=prev.innerText||"";if(text.includes('HAC-')&&text.includes(':')){{let rawTitle=text.substring(text.indexOf(':')+1).trim();rawTitle=rawTitle.replace(/\\s*\\(\\d+\\/\\d+\\)\\s*$/, '').trim();return rawTitle;}}prev=prev.previousElementSibling;}}current=current.parentElement;}}return null;}}
+# Мінімальна ціна зі знижкою, яку приймає Nintendo (з повідомлень порталу). Якщо розрахована ціна нижча —
+# ставимо мінімум; якщо мінімум не нижчий за звичайну ціну — знижку в цій країні не робимо.
+# Нові обмеження додавай сюди: "КОД_ВАЛЮТИ": мінімальна_ціна.
+MIN_SALE_PRICES = {"USD": 1.99, "CAD": 2.79, "MXN": 42.99, "BRL": 11.99, "ARS": 2799.99,
+                   "CLP": 1990, "COP": 8600, "PEN": 7.49}
+# Валюти без копійок: ціни в них — цілі числа, а крапка чи кома — це роздільник тисяч (1.908 CLP = 1908).
+ZERO_DECIMAL_CURRENCIES = ["CLP", "COP", "JPY", "KRW", "TWD", "IDR", "VND"]
+
+BOOKMARKLET_TEMPLATE = r"""javascript:(function(){
+const discounts = __DISCOUNTS__;
+const quarterRe = new RegExp(__QUARTER_RE__, "i");
+const minPrices = __MIN_PRICES__;
+const zeroDec = __ZERO_DEC__;
+const known = new Set(Object.keys(minPrices).concat(zeroDec, ["EUR","GBP","AUD","NZD","CHF","SEK","NOK","DKK","PLN","CZK","ZAR","HKD","SGD","THB","MYR","PHP","RUB","HUF"]));
+function rowCurrency(row){const m=((row&&row.innerText)||"").match(/\b[A-Z]{3}\b/g)||[];for(const c of m){if(known.has(c))return c;}return null;}
+function parsePrice(text,cur){let s=text.trim().replace(/[^0-9.,]/g,'');if(!s)return null;
+ if(zeroDec.includes(cur))return parseInt(s.replace(/[.,]/g,''),10);
+ if(s.includes('.')&&s.includes(',')){if(s.lastIndexOf('.')<s.lastIndexOf(',')){s=s.replace(/\./g,'').replace(',','.');}else{s=s.replace(/,/g,'');}}
+ else{const sep=s.includes(',')?',':(s.includes('.')?'.':null);if(sep){const parts=s.split(sep);if(parts.length>2||parts[parts.length-1].length===3){s=parts.join('');}else{s=parts.join('.');}}}
+ return parseFloat(s);}
+function getGameTitle(el){let current=el;while(current&&current!==document.body){let prev=current.previousElementSibling;while(prev){let text=prev.innerText||"";if(text.includes('HAC-')&&text.includes(':')){let rawTitle=text.substring(text.indexOf(':')+1).trim();rawTitle=rawTitle.replace(/\s*\(\d+\/\d+\)\s*$/,'').trim();return rawTitle;}prev=prev.previousElementSibling;}current=current.parentElement;}return null;}
 const sortedKeys=Object.keys(discounts).sort((a,b)=>b.length-a.length);
-const inputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(inp=>{{const td=inp.closest('td');if(!td)return false;const prevTd=td.previousElementSibling;return prevTd&&/[\\d]/.test(prevTd.innerText);}});
-let updatedCount=0;let quarterCount=0;
-inputs.forEach(priceInput=>{{const td=priceInput.closest('td');const regularPriceTd=td.previousElementSibling;if(!regularPriceTd)return;let regularPrice=parsePrice(regularPriceTd.innerText);if(regularPrice===null||isNaN(regularPrice)||regularPrice<=0)return;let gameTitle=getGameTitle(priceInput)||"Default";let cleanTitle=gameTitle.toLowerCase().replace(/\\s+/g,' ').trim();let discountPercent=70;let matched=false;for(let k of sortedKeys){{if(cleanTitle===k){{discountPercent=discounts[k];matched=true;break;}}}}if(!matched){{for(let k of sortedKeys){{if(cleanTitle.includes(k)||k.includes(cleanTitle)){{discountPercent=discounts[k];break;}}}}}}let discountedVal=regularPrice*(1-(discountPercent/100));let finalPriceStr="";const rowEl=priceInput.closest('tr');if(rowEl&&quarterRe.test(rowEl.innerText)){{finalPriceStr=(Math.floor(discountedVal*4+1e-9)/4).toFixed(2);quarterCount++;}}else if(regularPriceTd.innerText.includes(',')||regularPriceTd.innerText.includes('.')){{finalPriceStr=(Math.floor(discountedVal*100)/100).toFixed(2);}}else{{finalPriceStr=Math.floor(discountedVal).toString();}}priceInput.value=finalPriceStr;priceInput.dispatchEvent(new Event('input',{{bubbles:true}}));priceInput.dispatchEvent(new Event('change',{{bubbles:true}}));const row=priceInput.closest('tr');if(row){{const checkbox=row.querySelector('input[type="checkbox"]');if(checkbox&&!checkbox.checked){{checkbox.click();}}}}updatedCount++;}});
-alert("🎉 Заповнено цін для обраних ігор: "+updatedCount+(quarterCount?"\\nОкруглено до кратних 0.25 (Данія, ПАР): "+quarterCount:""));
-}})();"""
+const inputs=Array.from(document.querySelectorAll('input[type="text"]')).filter(inp=>{const td=inp.closest('td');if(!td)return false;const prevTd=td.previousElementSibling;return prevTd&&/[\d]/.test(prevTd.innerText);});
+let updatedCount=0,quarterCount=0;const raised=[],skipped=[];
+inputs.forEach(priceInput=>{
+ const td=priceInput.closest('td');const regularPriceTd=td.previousElementSibling;if(!regularPriceTd)return;
+ const row=priceInput.closest('tr');const cur=rowCurrency(row);
+ const country=(row&&row.cells&&row.cells[0])?row.cells[0].innerText.trim():(cur||"?");
+ const regularPrice=parsePrice(regularPriceTd.innerText,cur);if(regularPrice===null||isNaN(regularPrice)||regularPrice<=0)return;
+ let gameTitle=getGameTitle(priceInput)||"Default";let cleanTitle=gameTitle.toLowerCase().replace(/\s+/g,' ').trim();
+ let discountPercent=70;let matched=false;for(let k of sortedKeys){if(cleanTitle===k){discountPercent=discounts[k];matched=true;break;}}
+ if(!matched){for(let k of sortedKeys){if(cleanTitle.includes(k)||k.includes(cleanTitle)){discountPercent=discounts[k];break;}}}
+ const minP=(cur&&minPrices[cur]!=null)?minPrices[cur]:null;
+ if(minP!==null&&minP>=regularPrice){skipped.push(country+" ("+gameTitle+")");return;}
+ const raw=regularPrice*(1-(discountPercent/100));let v,mode;
+ if(zeroDec.includes(cur)){v=Math.floor(raw+1e-9);mode="int";}
+ else if(row&&quarterRe.test(row.innerText)){v=Math.floor(raw*4+1e-9)/4;mode="2dp";quarterCount++;}
+ else if(cur||regularPriceTd.innerText.includes(',')||regularPriceTd.innerText.includes('.')){v=Math.floor(raw*100+1e-6)/100;mode="2dp";}
+ else{v=Math.floor(raw+1e-9);mode="int";}
+ if(minP!==null&&v<minP){v=minP;raised.push(country);}
+ const finalPriceStr=mode==="int"?String(Math.round(v)):v.toFixed(2);
+ priceInput.value=finalPriceStr;priceInput.dispatchEvent(new Event('input',{bubbles:true}));priceInput.dispatchEvent(new Event('change',{bubbles:true}));
+ if(row){const checkbox=row.querySelector('input[type="checkbox"]');if(checkbox&&!checkbox.checked){checkbox.click();}}
+ updatedCount++;});
+let msg="🎉 Заповнено цін: "+updatedCount;
+if(quarterCount)msg+="\nОкруглено до кратних 0.25 (Данія, ПАР): "+quarterCount;
+if(raised.length)msg+="\nПідняли до мінімальної ціни Nintendo (знижка менша за задану): "+raised.join(", ");
+if(skipped.length)msg+="\nПропущено — звичайна ціна вже не вища за мінімальну, знижка неможлива: "+skipped.join(", ");
+alert(msg);
+})();"""
 
 
 def sheet_discount(r, minimum=0):
@@ -3269,9 +3308,11 @@ def render_nintendo_sale():
             st.warning("Оберіть хоча б одну гру галочкою!")
         else:
             payload = {row["Гра"].strip().lower(): int(row["Знижка (%)"]) for _, row in picked.iterrows()}
-            code = BOOKMARKLET_TEMPLATE.format(json_str=json.dumps(payload, ensure_ascii=False), quarter_re=json.dumps(QUARTER_PRICE_RE))
+            code = (BOOKMARKLET_TEMPLATE.replace("__DISCOUNTS__", json.dumps(payload, ensure_ascii=False))
+                    .replace("__QUARTER_RE__", json.dumps(QUARTER_PRICE_RE)).replace("__MIN_PRICES__", json.dumps(MIN_SALE_PRICES))
+                    .replace("__ZERO_DEC__", json.dumps(ZERO_DECIMAL_CURRENCIES)))
             st.success(f"🎉 Bookmarklet згенеровано для {len(picked)} ігор!")
-            st.caption("Для Данії та ПАР ціни округлюються вниз до кратних 0.25 — так вимагає eShop, а знижка не стає меншою за задану.")
+            st.caption("Букмарклет враховує правила eShop: для Данії та ПАР ціни кратні 0.25, ціни в песо Чилі й Колумбії — цілі числа, а в країнах Америки ціна не опускається нижче мінімуму Nintendo (тоді знижка буде меншою за задану).")
             b1, b2 = st.columns(2)
             with b1:
                 st.markdown("##### 📌 Код закладки:")
